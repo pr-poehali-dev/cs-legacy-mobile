@@ -1,14 +1,16 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Slider } from '@/components/ui/slider';
 import { Switch } from '@/components/ui/switch';
 import { Label } from '@/components/ui/label';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import Icon from '@/components/ui/icon';
 
 type GameScreen = 'menu' | 'game' | 'settings' | 'pause' | 'stats';
 type Weapon = 'ak47' | 'm4a1' | 'deagle';
+type GraphicsQuality = 'very_low' | 'low' | 'medium' | 'high' | 'ultra';
 
 interface PlayerStats {
   hp: number;
@@ -16,14 +18,35 @@ interface PlayerStats {
   kills: number;
   deaths: number;
   weapon: Weapon;
+  ammo: number;
+  maxAmmo: number;
 }
 
 interface Settings {
-  graphics: number;
+  graphics: GraphicsQuality;
   music: number;
   sound: number;
   sensitivity: number;
   graffiti: boolean;
+}
+
+interface Player {
+  x: number;
+  y: number;
+  z: number;
+  angle: number;
+  pitch: number;
+  velocityY: number;
+  isJumping: boolean;
+}
+
+interface Wall {
+  x1: number;
+  y1: number;
+  x2: number;
+  y2: number;
+  height: number;
+  color: string;
 }
 
 const Index = () => {
@@ -33,83 +56,323 @@ const Index = () => {
     armor: 100,
     kills: 0,
     deaths: 0,
-    weapon: 'ak47'
+    weapon: 'ak47',
+    ammo: 30,
+    maxAmmo: 30
   });
   const [settings, setSettings] = useState<Settings>({
-    graphics: 50,
+    graphics: 'medium',
     music: 50,
     sound: 50,
     sensitivity: 50,
     graffiti: true
   });
+  const [player, setPlayer] = useState<Player>({
+    x: 5,
+    y: 0,
+    z: 5,
+    angle: 0,
+    pitch: 0,
+    velocityY: 0,
+    isJumping: false
+  });
+  const [keys, setKeys] = useState<Record<string, boolean>>({});
+  const [mouseMovement, setMouseMovement] = useState({ x: 0, y: 0 });
+  const [isShooting, setIsShooting] = useState(false);
+  const [shootingAnimation, setShootingAnimation] = useState(0);
   const [joystickPosition, setJoystickPosition] = useState({ x: 0, y: 0 });
   const [lookPosition, setLookPosition] = useState({ x: 0, y: 0 });
   const [isMobile, setIsMobile] = useState(false);
+  const [isPointerLocked, setIsPointerLocked] = useState(false);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const animationRef = useRef<number>();
+
+  const walls: Wall[] = [
+    { x1: 0, y1: 0, x2: 20, y2: 0, height: 3, color: '#D4A574' },
+    { x1: 20, y1: 0, x2: 20, y2: 20, height: 3, color: '#D4A574' },
+    { x1: 20, y1: 20, x2: 0, y2: 20, height: 3, color: '#D4A574' },
+    { x1: 0, y1: 20, x2: 0, y2: 0, height: 3, color: '#D4A574' },
+    { x1: 5, y1: 5, x2: 15, y2: 5, height: 2, color: '#8B7355' },
+    { x1: 15, y1: 5, x2: 15, y2: 10, height: 2, color: '#8B7355' },
+    { x1: 5, y1: 15, x2: 10, y2: 15, height: 2.5, color: '#2C2416' },
+    { x1: 10, y1: 15, x2: 10, y2: 10, height: 2.5, color: '#2C2416' },
+  ];
 
   useEffect(() => {
     setIsMobile(window.innerWidth < 768);
   }, []);
 
+  const handlePointerLockChange = useCallback(() => {
+    setIsPointerLocked(document.pointerLockElement === canvasRef.current);
+  }, []);
+
+  const handleMouseMove = useCallback((e: MouseEvent) => {
+    if (screen === 'game' && isPointerLocked) {
+      setMouseMovement({ x: e.movementX, y: e.movementY });
+    }
+  }, [screen, isPointerLocked]);
+
   useEffect(() => {
-    if (screen === 'game' && canvasRef.current) {
-      const canvas = canvasRef.current;
-      const ctx = canvas.getContext('2d');
-      if (!ctx) return;
+    document.addEventListener('pointerlockchange', handlePointerLockChange);
+    document.addEventListener('mousemove', handleMouseMove);
+    return () => {
+      document.removeEventListener('pointerlockchange', handlePointerLockChange);
+      document.removeEventListener('mousemove', handleMouseMove);
+    };
+  }, [handlePointerLockChange, handleMouseMove]);
 
-      const drawGame = () => {
-        ctx.fillStyle = '#D4A574';
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
+  const handleCanvasClick = () => {
+    if (screen === 'game' && canvasRef.current && !isPointerLocked) {
+      canvasRef.current.requestPointerLock();
+    }
+  };
 
-        ctx.fillStyle = '#8B7355';
-        ctx.fillRect(0, canvas.height * 0.6, canvas.width, canvas.height * 0.4);
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.code === 'Escape' && screen === 'game') {
+        setScreen('pause');
+        document.exitPointerLock();
+      }
+      setKeys(prev => ({ ...prev, [e.code]: true }));
+      
+      if (e.code === 'KeyR' && screen === 'game') {
+        setPlayerStats(prev => ({ ...prev, ammo: prev.maxAmmo }));
+      }
+    };
 
-        ctx.fillStyle = '#2C2416';
-        for (let i = 0; i < 5; i++) {
-          const x = (i * canvas.width) / 5 + 50;
-          const height = 150 + Math.random() * 100;
-          ctx.fillRect(x, canvas.height * 0.6 - height, 100, height);
+    const handleKeyUp = (e: KeyboardEvent) => {
+      setKeys(prev => ({ ...prev, [e.code]: false }));
+    };
+
+    const handleMouseDown = (e: MouseEvent) => {
+      if (screen === 'game' && isPointerLocked && e.button === 0) {
+        setIsShooting(true);
+        setShootingAnimation(1);
+        setPlayerStats(prev => prev.ammo > 0 ? { ...prev, ammo: prev.ammo - 1 } : prev);
+      }
+    };
+
+    const handleMouseUp = () => {
+      setIsShooting(false);
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('keyup', handleKeyUp);
+    window.addEventListener('mousedown', handleMouseDown);
+    window.addEventListener('mouseup', handleMouseUp);
+
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('keyup', handleKeyUp);
+      window.removeEventListener('mousedown', handleMouseDown);
+      window.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, [screen, isPointerLocked]);
+
+  const getGraphicsSettings = (quality: GraphicsQuality) => {
+    const configs = {
+      very_low: { renderDistance: 8, wallDetail: 1, shadows: false },
+      low: { renderDistance: 12, wallDetail: 2, shadows: false },
+      medium: { renderDistance: 16, wallDetail: 3, shadows: true },
+      high: { renderDistance: 20, wallDetail: 4, shadows: true },
+      ultra: { renderDistance: 25, wallDetail: 5, shadows: true }
+    };
+    return configs[quality];
+  };
+
+  useEffect(() => {
+    if (screen !== 'game' || !canvasRef.current) return;
+
+    const canvas = canvasRef.current;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    const graphicsConfig = getGraphicsSettings(settings.graphics);
+    const sensitivity = settings.sensitivity / 1000;
+
+    const gameLoop = () => {
+      setPlayer(prev => {
+        const newPlayer = { ...prev };
+
+        if (mouseMovement.x !== 0 || mouseMovement.y !== 0) {
+          newPlayer.angle += mouseMovement.x * sensitivity;
+          newPlayer.pitch = Math.max(-Math.PI / 3, Math.min(Math.PI / 3, newPlayer.pitch + mouseMovement.y * sensitivity));
+          setMouseMovement({ x: 0, y: 0 });
         }
 
-        ctx.fillStyle = '#4ECDC4';
-        ctx.fillRect(canvas.width / 2 - 2, canvas.height / 2 - 15, 4, 30);
-        ctx.fillRect(canvas.width / 2 - 15, canvas.height / 2 - 2, 30, 4);
+        const speed = 0.1;
+        const dirX = Math.cos(newPlayer.angle);
+        const dirZ = Math.sin(newPlayer.angle);
+
+        if (keys['KeyW']) {
+          newPlayer.x += dirX * speed;
+          newPlayer.z += dirZ * speed;
+        }
+        if (keys['KeyS']) {
+          newPlayer.x -= dirX * speed;
+          newPlayer.z -= dirZ * speed;
+        }
+        if (keys['KeyA']) {
+          newPlayer.x += Math.cos(newPlayer.angle - Math.PI / 2) * speed;
+          newPlayer.z += Math.sin(newPlayer.angle - Math.PI / 2) * speed;
+        }
+        if (keys['KeyD']) {
+          newPlayer.x += Math.cos(newPlayer.angle + Math.PI / 2) * speed;
+          newPlayer.z += Math.sin(newPlayer.angle + Math.PI / 2) * speed;
+        }
+
+        if (keys['Space'] && !newPlayer.isJumping) {
+          newPlayer.velocityY = 0.15;
+          newPlayer.isJumping = true;
+        }
+
+        newPlayer.velocityY -= 0.01;
+        newPlayer.y += newPlayer.velocityY;
+
+        if (newPlayer.y <= 0) {
+          newPlayer.y = 0;
+          newPlayer.velocityY = 0;
+          newPlayer.isJumping = false;
+        }
+
+        newPlayer.x = Math.max(0.5, Math.min(19.5, newPlayer.x));
+        newPlayer.z = Math.max(0.5, Math.min(19.5, newPlayer.z));
+
+        return newPlayer;
+      });
+
+      if (shootingAnimation > 0) {
+        setShootingAnimation(prev => Math.max(0, prev - 0.1));
+      }
+
+      ctx.fillStyle = '#87CEEB';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      const horizonY = canvas.height / 2 + player.pitch * 200;
+      
+      ctx.fillStyle = '#D4A574';
+      ctx.fillRect(0, horizonY, canvas.width, canvas.height - horizonY);
+
+      const fov = Math.PI / 3;
+      const numRays = canvas.width / graphicsConfig.wallDetail;
+
+      for (let i = 0; i < numRays; i++) {
+        const rayAngle = (player.angle - fov / 2) + (i / numRays) * fov;
+        const rayDirX = Math.cos(rayAngle);
+        const rayDirZ = Math.sin(rayAngle);
+
+        let closestDist = Infinity;
+        let closestWall: Wall | null = null;
+
+        walls.forEach(wall => {
+          const wallDirX = wall.x2 - wall.x1;
+          const wallDirY = wall.y2 - wall.y1;
+          const wallLen = Math.sqrt(wallDirX * wallDirX + wallDirY * wallDirY);
+          const wallNormX = wallDirX / wallLen;
+          const wallNormY = wallDirY / wallLen;
+
+          for (let d = 0; d < wallLen; d += 0.1) {
+            const wx = wall.x1 + wallNormX * d;
+            const wy = wall.y1 + wallNormY * d;
+            
+            const toWallX = wx - player.x;
+            const toWallY = wy - player.z;
+            const dist = Math.sqrt(toWallX * toWallX + toWallY * toWallY);
+
+            if (dist < graphicsConfig.renderDistance) {
+              const angle = Math.atan2(toWallY, toWallX);
+              const angleDiff = rayAngle - angle;
+              const angleDiffNorm = Math.atan2(Math.sin(angleDiff), Math.cos(angleDiff));
+
+              if (Math.abs(angleDiffNorm) < 0.05 && dist < closestDist) {
+                closestDist = dist;
+                closestWall = wall;
+              }
+            }
+          }
+        });
+
+        if (closestWall && closestDist < graphicsConfig.renderDistance) {
+          const correctedDist = closestDist * Math.cos(rayAngle - player.angle);
+          const wallHeight = (closestWall.height / correctedDist) * 200;
+          
+          const darkness = Math.max(0.3, 1 - (correctedDist / graphicsConfig.renderDistance));
+          const r = parseInt(closestWall.color.slice(1, 3), 16) * darkness;
+          const g = parseInt(closestWall.color.slice(3, 5), 16) * darkness;
+          const b = parseInt(closestWall.color.slice(5, 7), 16) * darkness;
+
+          ctx.fillStyle = `rgb(${r}, ${g}, ${b})`;
+          const x = (i / numRays) * canvas.width;
+          const y = horizonY - wallHeight / 2;
+          ctx.fillRect(x, y, canvas.width / numRays + 1, wallHeight);
+        }
+      }
+
+      const weaponData = {
+        ak47: { name: 'АК-47', color: '#2C2416', length: 0.4 },
+        m4a1: { name: 'M4A1', color: '#1A1A1A', length: 0.35 },
+        deagle: { name: 'Desert Eagle', color: '#3A3A3A', length: 0.25 }
       };
 
-      drawGame();
-    }
-  }, [screen]);
+      const weapon = weaponData[playerStats.weapon];
+      const weaponY = canvas.height - 100 + shootingAnimation * 30;
+      const weaponX = canvas.width * 0.7;
+
+      ctx.fillStyle = weapon.color;
+      ctx.fillRect(weaponX, weaponY - 40, 150, 20);
+      ctx.fillRect(weaponX + 120, weaponY - 50, 10, 30);
+      ctx.fillRect(weaponX - 20, weaponY - 30, 40, 10);
+
+      if (shootingAnimation > 0) {
+        ctx.fillStyle = '#FFD700';
+        ctx.beginPath();
+        ctx.arc(weaponX + 150, weaponY - 45, 10 + shootingAnimation * 20, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      ctx.strokeStyle = '#4ECDC4';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(canvas.width / 2 - 10, canvas.height / 2);
+      ctx.lineTo(canvas.width / 2 + 10, canvas.height / 2);
+      ctx.moveTo(canvas.width / 2, canvas.height / 2 - 10);
+      ctx.lineTo(canvas.width / 2, canvas.height / 2 + 10);
+      ctx.stroke();
+
+      animationRef.current = requestAnimationFrame(gameLoop);
+    };
+
+    gameLoop();
+
+    return () => {
+      if (animationRef.current) {
+        cancelAnimationFrame(animationRef.current);
+      }
+    };
+  }, [screen, player, keys, mouseMovement, playerStats.weapon, shootingAnimation, settings.graphics, settings.sensitivity]);
 
   const handleJoystickMove = (e: React.TouchEvent | React.MouseEvent) => {
     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
     const touch = 'touches' in e ? e.touches[0] : e;
     const x = ((touch.clientX - rect.left - rect.width / 2) / (rect.width / 2)) * 100;
     const y = ((touch.clientY - rect.top - rect.height / 2) / (rect.height / 2)) * 100;
-    
-    const distance = Math.sqrt(x * x + y * y);
-    if (distance > 100) {
-      const angle = Math.atan2(y, x);
-      setJoystickPosition({ x: Math.cos(angle) * 100, y: Math.sin(angle) * 100 });
-    } else {
-      setJoystickPosition({ x, y });
-    }
-  };
-
-  const handleLookMove = (e: React.TouchEvent | React.MouseEvent) => {
-    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-    const touch = 'touches' in e ? e.touches[0] : e;
-    const x = ((touch.clientX - rect.left - rect.width / 2) / (rect.width / 2)) * 100;
-    const y = ((touch.clientY - rect.top - rect.height / 2) / (rect.height / 2)) * 100;
-    setLookPosition({ x, y });
+    setJoystickPosition({ x, y });
   };
 
   const resetJoystick = () => setJoystickPosition({ x: 0, y: 0 });
-  const resetLook = () => setLookPosition({ x: 0, y: 0 });
 
   const weaponNames = {
     ak47: 'АК-47',
     m4a1: 'M4A1',
     deagle: 'Desert Eagle'
+  };
+
+  const graphicsLabels = {
+    very_low: 'Очень низко',
+    low: 'Низко',
+    medium: 'Средне',
+    high: 'Высоко',
+    ultra: 'Ультра'
   };
 
   if (screen === 'menu') {
@@ -186,12 +449,19 @@ const Index = () => {
 
               <TabsContent value="graphics" className="space-y-6 mt-6">
                 <div className="space-y-3">
-                  <Label className="text-[#4ECDC4] text-lg">Качество графики: {settings.graphics}%</Label>
-                  <Slider 
-                    value={[settings.graphics]} 
-                    onValueChange={(v) => setSettings({...settings, graphics: v[0]})}
-                    className="[&_[role=slider]]:bg-[#4ECDC4] [&_.slider-track]:bg-[#D4A574]/30"
-                  />
+                  <Label className="text-[#4ECDC4] text-lg">Качество графики</Label>
+                  <Select value={settings.graphics} onValueChange={(v: GraphicsQuality) => setSettings({...settings, graphics: v})}>
+                    <SelectTrigger className="bg-black/60 border-[#D4A574] text-[#D4A574]">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent className="bg-[#2C2416] border-[#D4A574]">
+                      <SelectItem value="very_low" className="text-[#D4A574]">Очень низко</SelectItem>
+                      <SelectItem value="low" className="text-[#D4A574]">Низко</SelectItem>
+                      <SelectItem value="medium" className="text-[#D4A574]">Средне</SelectItem>
+                      <SelectItem value="high" className="text-[#D4A574]">Высоко</SelectItem>
+                      <SelectItem value="ultra" className="text-[#D4A574]">Ультра</SelectItem>
+                    </SelectContent>
+                  </Select>
                 </div>
                 <div className="flex items-center justify-between">
                   <Label className="text-[#4ECDC4] text-lg">Граффити</Label>
@@ -232,9 +502,9 @@ const Index = () => {
                   <div className="grid grid-cols-2 gap-2">
                     <div>WASD - Движение</div>
                     <div>ЛКМ - Стрельба</div>
-                    <div>E - Использовать</div>
+                    <div>Пробел - Прыжок</div>
                     <div>R - Перезарядка</div>
-                    <div>Q - Быстрое оружие</div>
+                    <div>Мышь - Обзор</div>
                     <div>ESC - Пауза</div>
                   </div>
                 </div>
@@ -312,7 +582,10 @@ const Index = () => {
           <div className="space-y-3">
             <Button 
               className="w-full h-12 bg-[#4ECDC4] hover:bg-[#4ECDC4]/80 text-black font-bold"
-              onClick={() => setScreen('game')}
+              onClick={() => {
+                setScreen('game');
+                canvasRef.current?.requestPointerLock();
+              }}
             >
               ПРОДОЛЖИТЬ
             </Button>
@@ -324,7 +597,10 @@ const Index = () => {
             </Button>
             <Button 
               className="w-full h-12 bg-[#FF6B35] hover:bg-[#FF6B35]/80 text-white font-bold"
-              onClick={() => setScreen('menu')}
+              onClick={() => {
+                setScreen('menu');
+                document.exitPointerLock();
+              }}
             >
               ВЫЙТИ В МЕНЮ
             </Button>
@@ -340,17 +616,28 @@ const Index = () => {
         ref={canvasRef}
         width={1920}
         height={1080}
-        className="absolute inset-0 w-full h-full object-cover"
+        className="absolute inset-0 w-full h-full object-cover cursor-crosshair"
+        onClick={handleCanvasClick}
       />
 
-      <div className="absolute top-4 left-4 space-y-2 z-10">
-        <div className="bg-black/60 px-4 py-2 rounded border-2 border-[#4ECDC4]">
-          <div className="flex items-center gap-3">
-            <Icon name="Heart" className="text-[#FF6B35]" size={20} />
-            <div className="text-[#4ECDC4] font-bold text-xl">{playerStats.hp}</div>
+      {!isPointerLocked && screen === 'game' && (
+        <div className="absolute inset-0 flex items-center justify-center bg-black/50 z-30">
+          <div className="text-center space-y-4">
+            <Icon name="MousePointer2" size={48} className="text-[#4ECDC4] mx-auto" />
+            <p className="text-[#4ECDC4] text-xl font-bold">Нажмите, чтобы играть</p>
+            <p className="text-[#D4A574] text-sm">ESC для выхода</p>
           </div>
         </div>
-        <div className="bg-black/60 px-4 py-2 rounded border-2 border-[#4ECDC4]">
+      )}
+
+      <div className="absolute top-4 left-4 space-y-2 z-10">
+        <div className="bg-black/80 px-4 py-2 rounded border-2 border-[#FF6B35]">
+          <div className="flex items-center gap-3">
+            <Icon name="Heart" className="text-[#FF6B35]" size={20} />
+            <div className="text-[#FF6B35] font-bold text-xl">{playerStats.hp}</div>
+          </div>
+        </div>
+        <div className="bg-black/80 px-4 py-2 rounded border-2 border-[#4ECDC4]">
           <div className="flex items-center gap-3">
             <Icon name="Shield" className="text-[#4ECDC4]" size={20} />
             <div className="text-[#4ECDC4] font-bold text-xl">{playerStats.armor}</div>
@@ -358,19 +645,10 @@ const Index = () => {
         </div>
       </div>
 
-      <div className="absolute top-4 right-4 z-10">
-        <Button
-          variant="ghost"
-          className="bg-black/60 hover:bg-black/80 text-[#D4A574]"
-          onClick={() => setScreen('pause')}
-        >
-          <Icon name="Pause" size={24} />
-        </Button>
-      </div>
-
-      <div className="absolute bottom-4 right-4 bg-black/60 px-6 py-3 rounded border-2 border-[#D4A574] z-10">
+      <div className="absolute bottom-4 left-4 bg-black/80 px-6 py-3 rounded border-2 border-[#D4A574] z-10">
         <div className="text-[#4ECDC4] text-sm mb-1">ОРУЖИЕ</div>
         <div className="text-[#D4A574] font-bold text-2xl">{weaponNames[playerStats.weapon]}</div>
+        <div className="text-[#4ECDC4] text-lg mt-1">{playerStats.ammo} / {playerStats.maxAmmo}</div>
         <div className="flex gap-2 mt-2">
           {(['ak47', 'm4a1', 'deagle'] as Weapon[]).map((weapon) => (
             <button
@@ -388,48 +666,32 @@ const Index = () => {
         </div>
       </div>
 
+      <div className="absolute top-4 right-4 bg-black/80 px-4 py-2 rounded border-2 border-[#D4A574] text-[#4ECDC4] text-sm z-10">
+        Графика: {graphicsLabels[settings.graphics]}
+      </div>
+
       {isMobile && (
         <>
           <div 
             className="absolute bottom-20 left-8 w-32 h-32 bg-black/40 rounded-full border-2 border-[#4ECDC4] z-20"
-            onTouchStart={handleJoystickMove}
             onTouchMove={handleJoystickMove}
             onTouchEnd={resetJoystick}
-            onMouseDown={handleJoystickMove}
-            onMouseMove={(e) => e.buttons === 1 && handleJoystickMove(e)}
-            onMouseUp={resetJoystick}
-            onMouseLeave={resetJoystick}
           >
             <div 
-              className="absolute top-1/2 left-1/2 w-12 h-12 bg-[#4ECDC4] rounded-full -translate-x-1/2 -translate-y-1/2 transition-transform"
+              className="absolute top-1/2 left-1/2 w-12 h-12 bg-[#4ECDC4] rounded-full -translate-x-1/2 -translate-y-1/2"
               style={{
                 transform: `translate(calc(-50% + ${joystickPosition.x * 0.4}px), calc(-50% + ${joystickPosition.y * 0.4}px))`
               }}
             />
           </div>
 
-          <div 
-            className="absolute bottom-20 right-8 w-32 h-32 bg-black/40 rounded-full border-2 border-[#D4A574] z-20"
-            onTouchStart={handleLookMove}
-            onTouchMove={handleLookMove}
-            onTouchEnd={resetLook}
-            onMouseDown={handleLookMove}
-            onMouseMove={(e) => e.buttons === 1 && handleLookMove(e)}
-            onMouseUp={resetLook}
-            onMouseLeave={resetLook}
-          >
-            <div 
-              className="absolute top-1/2 left-1/2 w-12 h-12 bg-[#D4A574] rounded-full -translate-x-1/2 -translate-y-1/2 transition-transform"
-              style={{
-                transform: `translate(calc(-50% + ${lookPosition.x * 0.4}px), calc(-50% + ${lookPosition.y * 0.4}px))`
-              }}
-            />
-          </div>
-
           <button
-            className="absolute bottom-24 right-48 w-20 h-20 bg-[#FF6B35] rounded-full border-4 border-[#FF6B35]/50 z-20 flex items-center justify-center active:scale-95 transition-transform"
-            onTouchStart={() => {}}
-            onClick={() => {}}
+            className="absolute bottom-24 right-24 w-20 h-20 bg-[#FF6B35] rounded-full border-4 border-[#FF6B35]/50 z-20 flex items-center justify-center"
+            onTouchStart={() => {
+              setIsShooting(true);
+              setShootingAnimation(1);
+              setPlayerStats(prev => prev.ammo > 0 ? { ...prev, ammo: prev.ammo - 1 } : prev);
+            }}
           >
             <Icon name="Crosshair" className="text-white" size={32} />
           </button>
